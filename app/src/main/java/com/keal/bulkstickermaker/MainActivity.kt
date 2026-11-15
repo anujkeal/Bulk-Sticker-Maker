@@ -24,6 +24,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import java.util.UUID
 import kotlin.math.min
 
 class MainActivity : ComponentActivity() {
@@ -211,19 +212,26 @@ class MainActivity : ComponentActivity() {
         addButton.text = "CREATING STICKERS…"
         statusText.text = "Preparing ${photoUris.size} stickers. Please wait…"
 
+        // WhatsApp identifies packs by ID, not by their visible name.
+        // Give every new pack its own stable ID so it is added separately.
+        val packId = "pack_" + UUID.randomUUID().toString().replace("-", "").take(20)
         worker.execute {
             try {
-                val names = createStickerFiles(photoUris, packName)
+                val names = createStickerFiles(photoUris, packId)
                 runOnUiThread {
-                    getSharedPreferences("pack", MODE_PRIVATE).edit()
-                        .putString("name", packName)
-                        .putString("stickers", names.joinToString("|"))
-                        .putString("version", System.currentTimeMillis().toString())
+                    val prefs = getSharedPreferences("pack", MODE_PRIVATE)
+                    val ids = prefs.getStringSet("pack_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
+                    ids.add(packId)
+                    prefs.edit()
+                        .putStringSet("pack_ids", ids)
+                        .putString("${packId}_name", packName)
+                        .putString("${packId}_stickers", names.joinToString("|"))
+                        .putString("${packId}_version", "1")
                         .apply()
 
                     statusText.text = "Created ${names.size} stickers. Opening WhatsApp…"
                     val intent = Intent("com.whatsapp.intent.action.ENABLE_STICKER_PACK").apply {
-                        putExtra("sticker_pack_id", "pack1")
+                        putExtra("sticker_pack_id", packId)
                         putExtra("sticker_pack_authority", StickerContentProvider.AUTHORITY)
                         putExtra("sticker_pack_name", packName)
                     }
@@ -252,8 +260,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun createStickerFiles(uris: List<Uri>, packName: String): List<String> {
-        val dir = File(filesDir, "stickers/pack1")
+    private fun createStickerFiles(uris: List<Uri>, packId: String): List<String> {
+        val dir = File(filesDir, "stickers/$packId")
         dir.deleteRecursively()
         check(dir.mkdirs()) { "Could not create sticker storage folder." }
         val names = mutableListOf<String>()
