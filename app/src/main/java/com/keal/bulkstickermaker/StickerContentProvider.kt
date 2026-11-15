@@ -17,7 +17,6 @@ class StickerContentProvider : ContentProvider() {
         private const val STICKERS = 3
         private const val ASSET = 4
 
-        // Column names are part of WhatsApp's public sticker-provider contract.
         private val metadataColumns = arrayOf(
             "sticker_pack_identifier",
             "sticker_pack_name",
@@ -51,10 +50,50 @@ class StickerContentProvider : ContentProvider() {
     }
 
     private fun prefs() = requireNotNull(context).getSharedPreferences("pack", 0)
-    private fun stickerNames(): List<String> =
-        prefs().getString("stickers", "").orEmpty().split("|").filter { it.isNotBlank() }
-    private fun packName() = prefs().getString("name", "My Stickers") ?: "My Stickers"
-    private fun packDir() = File(requireNotNull(context).filesDir, "stickers/pack1")
+
+    // Keep compatibility with packs created by older app versions (which used the ID "pack1").
+    private fun packIds(): List<String> {
+        val ids = prefs().getStringSet("pack_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (prefs().contains("stickers") && File(requireNotNull(context).filesDir, "stickers/pack1/tray.png").isFile) {
+            ids.add("pack1")
+        }
+        return ids.toList()
+    }
+
+    private fun stickerNames(id: String): List<String> {
+        val key = if (id == "pack1" && !prefs().contains("pack1_stickers")) "stickers" else "${id}_stickers"
+        return prefs().getString(key, "").orEmpty().split("|").filter { it.isNotBlank() }
+    }
+
+    private fun packName(id: String): String {
+        val key = if (id == "pack1" && !prefs().contains("pack1_name")) "name" else "${id}_name"
+        return prefs().getString(key, "My Stickers") ?: "My Stickers"
+    }
+
+    private fun packDir(id: String) = File(requireNotNull(context).filesDir, "stickers/$id")
+
+    private fun addMetadataRow(cursor: MatrixCursor, id: String) {
+        val names = stickerNames(id)
+        if (names.size !in 3..30 || !File(packDir(id), "tray.png").isFile) return
+        val versionKey = if (id == "pack1" && !prefs().contains("pack1_version")) "version" else "${id}_version"
+        cursor.addRow(
+            arrayOf(
+                id,
+                packName(id),
+                "Bulk Sticker Maker",
+                "tray.png",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                prefs().getString(versionKey, "1") ?: "1",
+                0,
+                0
+            )
+        )
+    }
 
     override fun query(
         uri: Uri,
@@ -64,35 +103,24 @@ class StickerContentProvider : ContentProvider() {
         sortOrder: String?
     ): Cursor {
         return when (matcher.match(uri)) {
-            METADATA, SINGLE_METADATA -> {
+            METADATA -> {
                 val cursor = MatrixCursor(metadataColumns)
-                val names = stickerNames()
-                if (names.size in 3..30 && File(packDir(), "tray.png").isFile) {
-                    cursor.addRow(
-                        arrayOf(
-                            "pack1",
-                            packName(),
-                            "Bulk Sticker Maker",
-                            "tray.png",
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                            prefs().getString("version", "1") ?: "1",
-                            0,
-                            0
-                        )
-                    )
-                }
+                packIds().forEach { addMetadataRow(cursor, it) }
+                cursor
+            }
+            SINGLE_METADATA -> {
+                val cursor = MatrixCursor(metadataColumns)
+                val id = uri.lastPathSegment.orEmpty()
+                if (id in packIds()) addMetadataRow(cursor, id)
                 cursor
             }
             STICKERS -> {
                 val cursor = MatrixCursor(stickerColumns)
-                stickerNames().forEach { file ->
-                    // WhatsApp expects a comma-separated list of emoji, not a JSON array.
-                    cursor.addRow(arrayOf(file, "😀", file.substringBeforeLast('.')))
+                val id = uri.lastPathSegment.orEmpty()
+                if (id in packIds()) {
+                    stickerNames(id).forEach { file ->
+                        cursor.addRow(arrayOf(file, "😀", file.substringBeforeLast('.')))
+                    }
                 }
                 cursor
             }
@@ -103,15 +131,16 @@ class StickerContentProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         require(mode == "r") { "Sticker assets are read-only" }
         val segments = uri.pathSegments
-        require(
-            segments.size == 3 &&
-                segments[0] == "stickers_asset" &&
-                segments[1] == "pack1"
-        ) { "Invalid sticker asset URI" }
-
+        require(segments.size == 3 && segments[0] == "stickers_asset") {
+            "Invalid sticker asset URI"
+        }
+        val id = segments[1]
+        require(id in packIds()) { "Unknown sticker pack" }
         val fileName = segments[2]
-        require(fileName == "tray.png" || fileName in stickerNames()) { "Unknown sticker asset" }
-        val directory = packDir().canonicalFile
+        require(fileName == "tray.png" || fileName in stickerNames(id)) {
+            "Unknown sticker asset"
+        }
+        val directory = packDir(id).canonicalFile
         val file = File(directory, fileName).canonicalFile
         require(file.parentFile == directory && file.isFile) { "Sticker asset not found" }
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
