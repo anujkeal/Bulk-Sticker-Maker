@@ -226,7 +226,7 @@ class MainActivity : ComponentActivity() {
     private fun makeSticker(source: Bitmap): Bitmap {
         val output = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        canvas.drawColor(Color.WHITE)
         val scale = min(512f / source.width, 512f / source.height)
         val width = source.width * scale
         val height = source.height * scale
