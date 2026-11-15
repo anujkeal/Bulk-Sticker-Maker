@@ -1,6 +1,6 @@
 package com.keal.bulkstickermaker
 
-import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -12,10 +12,8 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
-import android.view.View
 import android.widget.Button
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -25,12 +23,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.Executors
 import kotlin.math.min
 
 class MainActivity : ComponentActivity() {
     private val selected = mutableListOf<Uri>()
+    private val worker = Executors.newSingleThreadExecutor()
     private lateinit var nameInput: EditText
     private lateinit var countText: TextView
+    private lateinit var statusText: TextView
     private lateinit var preview: LinearLayout
     private lateinit var addButton: Button
 
@@ -46,8 +47,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.rgb(12, 14, 17)
         window.navigationBarColor = Color.rgb(12, 14, 17)
-        window.decorView.systemUiVisibility = 0
         buildScreen()
+    }
+
+    override fun onDestroy() {
+        worker.shutdown()
+        super.onDestroy()
     }
 
     private fun buildScreen() {
@@ -124,17 +129,26 @@ class MainActivity : ComponentActivity() {
             textSize = 15f
             isEnabled = false
             setTextColor(Color.WHITE)
-            background = rounded(Color.rgb(49, 105, 76), 14)
+            background = rounded(Color.rgb(49, 59, 54), 14)
             setOnClickListener { createAndAddPack() }
         }
         content.addView(addButton, LinearLayout.LayoutParams(-1, dp(56)))
+
+        statusText = TextView(this).apply {
+            text = "Select at least 3 photos to create a pack."
+            textSize = 12f
+            setTextColor(Color.rgb(165, 172, 181))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(4))
+        }
+        content.addView(statusText)
 
         content.addView(TextView(this).apply {
             text = "Made for personal sticker packs • Works offline"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(110, 119, 129))
-            setPadding(0, dp(24), 0, dp(8))
+            setPadding(0, dp(18), 0, dp(8))
         })
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -145,6 +159,7 @@ class MainActivity : ComponentActivity() {
         countText.text = "${selected.size} / 30 photos selected"
         addButton.isEnabled = selected.size in 3..30
         addButton.background = rounded(if (addButton.isEnabled) Color.rgb(25, 145, 83) else Color.rgb(49, 59, 54), 14)
+        statusText.text = if (selected.size >= 3) "Ready to create your sticker pack." else "Select at least 3 photos to create a pack."
         preview.removeAllViews()
         if (selected.isEmpty()) return
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -155,9 +170,7 @@ class MainActivity : ComponentActivity() {
                 background = rounded(Color.rgb(35, 40, 47), 10)
                 clipToOutline = true
             }
-            row.addView(image, LinearLayout.LayoutParams(0, dp(76), 1f).apply {
-                marginEnd = dp(6)
-            })
+            row.addView(image, LinearLayout.LayoutParams(0, dp(76), 1f).apply { marginEnd = dp(6) })
         }
         preview.addView(row)
         if (selected.size > 6) {
@@ -171,70 +184,99 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createAndAddPack() {
+        val photoUris = selected.toList()
         val packName = nameInput.text.toString().trim().ifBlank { "My Stickers" }.take(128)
-        if (selected.size !in 3..30) {
-            toast("Select between 3 and 30 photos.")
+        if (photoUris.size !in 3..30) {
+            statusText.text = "Please select between 3 and 30 photos."
             return
         }
-        try {
-            val dir = File(filesDir, "stickers/pack1")
-            dir.deleteRecursively()
-            dir.mkdirs()
-            val names = mutableListOf<String>()
-            selected.forEachIndexed { index, uri ->
-                val input = contentResolver.openInputStream(uri) ?: error("Cannot read photo ${index + 1}")
-                val source = input.use { BitmapFactory.decodeStream(it) } ?: error("Unsupported image ${index + 1}")
-                val output = makeSticker(source)
-                source.recycle()
-                val fileName = "sticker_${index + 1}.webp"
-                val file = File(dir, fileName)
-                FileOutputStream(file).use { stream ->
-                    var quality = 92
-                    do {
-                        stream.channel.truncate(0)
-                        stream.channel.position(0)
-                        output.compress(if (android.os.Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP, quality, stream)
-                        stream.flush()
-                        quality -= 5
-                    } while (file.length() > 100 * 1024 && quality >= 45)
+
+        addButton.isEnabled = false
+        addButton.text = "CREATING STICKERS…"
+        statusText.text = "Preparing ${photoUris.size} stickers. Please wait…"
+
+        worker.execute {
+            try {
+                val names = createStickerFiles(photoUris, packName)
+                runOnUiThread {
+                    getSharedPreferences("pack", MODE_PRIVATE).edit()
+                        .putString("name", packName)
+                        .putString("stickers", names.joinToString("|"))
+                        .putString("version", System.currentTimeMillis().toString())
+                        .apply()
+
+                    statusText.text = "Created ${names.size} stickers. Opening WhatsApp…"
+                    val intent = Intent("com.whatsapp.intent.action.ENABLE_STICKER_PACK").apply {
+                        putExtra("sticker_pack_id", "pack1")
+                        putExtra("sticker_pack_authority", StickerContentProvider.AUTHORITY)
+                        putExtra("sticker_pack_name", packName)
+                    }
+                    try {
+                        // Do not rely on resolveActivity(): Android package visibility can make
+                        // that check return null even when WhatsApp can handle the intent.
+                        startActivity(intent)
+                    } catch (e: ActivityNotFoundException) {
+                        statusText.text = "Stickers created, but WhatsApp is not installed or cannot add sticker packs."
+                        Toast.makeText(this, "Sticker files created. WhatsApp could not be opened.", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        statusText.text = "Stickers created, but WhatsApp could not open: ${e.message ?: "unknown error"}"
+                    } finally {
+                        addButton.isEnabled = true
+                        addButton.text = "CREATE STICKER PACK"
+                    }
                 }
-                output.recycle()
-                if (file.length() > 100 * 1024) error("Photo ${index + 1} is too detailed to compress below 100 KB. Try another image.")
-                names.add(fileName)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    statusText.text = "Creation failed: ${e.message ?: e.javaClass.simpleName}"
+                    Toast.makeText(this, "Creation failed: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show()
+                    addButton.isEnabled = true
+                    addButton.text = "CREATE STICKER PACK"
+                }
             }
-            // WhatsApp uses a separate small tray icon for the sticker pack.
-            val traySource = BitmapFactory.decodeFile(File(dir, names.first()).absolutePath)
-                ?: error("Could not create sticker tray icon")
-            val tray = Bitmap.createScaledBitmap(traySource, 96, 96, true)
-            traySource.recycle()
-            FileOutputStream(File(dir, "tray.png")).use { tray.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            tray.recycle()
-
-            getSharedPreferences("pack", MODE_PRIVATE).edit()
-                .putString("name", packName)
-                .putString("stickers", names.joinToString("|"))
-                .putString("version", System.currentTimeMillis().toString())
-                .apply()
-
-            val intent = Intent("com.whatsapp.intent.action.ENABLE_STICKER_PACK").apply {
-                putExtra("sticker_pack_id", "pack1")
-                putExtra("sticker_pack_authority", StickerContentProvider.AUTHORITY)
-                putExtra("sticker_pack_name", packName)
-            }
-            if (intent.resolveActivity(packageManager) != null) {
-                startActivity(intent)
-            } else {
-                toast("Sticker pack created. WhatsApp was not found.")
-            }
-        } catch (e: Exception) {
-            toast(e.message ?: "Could not create sticker pack.")
         }
+    }
+
+    private fun createStickerFiles(uris: List<Uri>, packName: String): List<String> {
+        val dir = File(filesDir, "stickers/pack1")
+        dir.deleteRecursively()
+        check(dir.mkdirs()) { "Could not create sticker storage folder." }
+        val names = mutableListOf<String>()
+
+        uris.forEachIndexed { index, uri ->
+            val source = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                ?: error("Could not read photo ${index + 1}. Please select it again.")
+            val output = makeSticker(source)
+            source.recycle()
+            val fileName = "sticker_${index + 1}.webp"
+            val file = File(dir, fileName)
+            var quality = 92
+            do {
+                FileOutputStream(file, false).use { stream ->
+                    output.compress(Bitmap.CompressFormat.WEBP, quality, stream)
+                    stream.flush()
+                }
+                quality -= 5
+            } while (file.length() > 100 * 1024 && quality >= 42)
+            output.recycle()
+            check(file.length() in 1..(100 * 1024)) {
+                "Photo ${index + 1} cannot be compressed below WhatsApp's 100 KB limit."
+            }
+            names.add(fileName)
+        }
+
+        val traySource = BitmapFactory.decodeFile(File(dir, names.first()).absolutePath)
+            ?: error("Could not create sticker tray icon.")
+        val tray = Bitmap.createScaledBitmap(traySource, 96, 96, true)
+        traySource.recycle()
+        FileOutputStream(File(dir, "tray.png")).use { tray.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        tray.recycle()
+        return names
     }
 
     private fun makeSticker(source: Bitmap): Bitmap {
         val output = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        canvas.drawColor(Color.WHITE)
+        canvas.drawColor(Color.TRANSPARENT)
         val scale = min(512f / source.width, 512f / source.height)
         val width = source.width * scale
         val height = source.height * scale
@@ -258,5 +300,4 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 }
