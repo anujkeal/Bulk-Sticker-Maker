@@ -15,3 +15,7 @@ android {
         versionName = "1.0"
     }
 }
+
+dependencies {
+    implementation("androidx.activity:activity-ktx:1.9.3")
+}
