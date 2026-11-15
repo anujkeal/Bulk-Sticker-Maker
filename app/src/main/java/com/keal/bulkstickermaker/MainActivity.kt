@@ -185,38 +185,36 @@ class MainActivity : ComponentActivity() {
 
     private fun renderPhotoGrid() {
         photoGrid.removeAllViews()
-        val tileSize = ((resources.displayMetrics.widthPixels / resources.displayMetrics.density) - 32f - 16f) / 3f
-        val tilePx = tileSize.toInt()
         val cells = mutableListOf<View>()
-        cells.add(createAddTile(tilePx))
+        cells.add(createAddTile())
 
         selected.forEachIndexed { index, uri ->
-            cells.add(createPhotoTile(uri, index, tilePx))
+            cells.add(createPhotoTile(uri, index))
         }
 
-        // Keep the initial grid visually populated with six tiles (add + five placeholders).
-        while (cells.size < 6) cells.add(createPlaceholder(tilePx))
+        // Keep six slots visible before photos are selected.
+        while (cells.size < 6) cells.add(createPlaceholder())
 
         cells.chunked(3).forEachIndexed { rowIndex, rowCells ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
             }
-            rowCells.forEachIndexed { columnIndex, cell ->
-                val params = LinearLayout.LayoutParams(tilePx, tilePx)
-                if (columnIndex < rowCells.lastIndex) params.marginEnd = dp(8)
+            val completeRow = rowCells.toMutableList()
+            while (completeRow.size < 3) completeRow.add(createPlaceholder())
+
+            completeRow.forEachIndexed { columnIndex, cell ->
+                val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                if (columnIndex < 2) params.marginEnd = dp(8)
                 row.addView(cell, params)
             }
-            repeat(3 - rowCells.size) {
-                row.addView(View(this), LinearLayout.LayoutParams(tilePx, tilePx))
-            }
-            photoGrid.addView(row, LinearLayout.LayoutParams(-1, tilePx).apply {
+            photoGrid.addView(row, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 if (rowIndex > 0) topMargin = dp(8)
             })
         }
     }
 
-    private fun createAddTile(size: Int): View {
-        val tile = FrameLayout(this).apply {
+    private fun createAddTile(): View {
+        val tile = SquareFrameLayout().apply {
             background = dashedRounded(ACCENT, 12)
             isClickable = true
             isFocusable = true
@@ -235,13 +233,14 @@ class MainActivity : ComponentActivity() {
         return tile
     }
 
-    private fun createPlaceholder(size: Int): View = View(this).apply {
+    private fun createPlaceholder(): View = SquareFrameLayout().apply {
         background = rounded(FIELD, 12)
+        clipToOutline = true
         contentDescription = "Empty photo slot"
     }
 
-    private fun createPhotoTile(uri: Uri, index: Int, size: Int): View {
-        val tile = FrameLayout(this).apply {
+    private fun createPhotoTile(uri: Uri, index: Int): View {
+        val tile = SquareFrameLayout().apply {
             background = rounded(FIELD, 12)
             clipToOutline = true
         }
@@ -252,13 +251,9 @@ class MainActivity : ComponentActivity() {
         }
         tile.addView(image, FrameLayout.LayoutParams(-1, -1))
 
-        val remove = TextView(this).apply {
-            text = "×"
-            textSize = 16f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(WHITE)
-            gravity = Gravity.CENTER
-            background = rounded(Color.argb(210, 14, 17, 22), 20)
+        val removeTouchTarget = FrameLayout(this).apply {
+            isClickable = true
+            isFocusable = true
             contentDescription = "Remove photo"
             setOnClickListener {
                 if (index in selected.indices) {
@@ -267,9 +262,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        tile.addView(remove, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP or Gravity.END).apply {
-            topMargin = dp(5)
-            marginEnd = dp(5)
+        val removeBadge = TextView(this).apply {
+            text = "×"
+            textSize = 12f
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            setTextColor(WHITE)
+            gravity = Gravity.CENTER
+            background = rounded(Color.argb(153, 0, 0, 0), 50)
+            includeFontPadding = false
+        }
+        removeTouchTarget.addView(removeBadge, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+        tile.addView(removeTouchTarget, FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(4)
+            marginEnd = dp(4)
         })
         return tile
     }
@@ -427,6 +432,14 @@ class MainActivity : ComponentActivity() {
             }
             canvas.drawPath(fold, line)
             canvas.restore()
+        }
+    }
+
+    private inner class SquareFrameLayout : FrameLayout(this@MainActivity) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            val exactSize = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY)
+            super.onMeasure(exactSize, exactSize)
         }
     }
 
