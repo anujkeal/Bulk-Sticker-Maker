@@ -50,6 +50,22 @@ class MainActivity : ComponentActivity() {
         buildScreen()
     }
 
+    @Deprecated("WhatsApp returns pack validation errors through this result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 200 && resultCode == RESULT_CANCELED) {
+            val validationError = data?.getStringExtra("validation_error")
+            if (!validationError.isNullOrBlank()) {
+                statusText.text = "WhatsApp rejected the pack: $validationError"
+                Toast.makeText(this, "WhatsApp rejected the sticker pack. See the message below the button.", Toast.LENGTH_LONG).show()
+            } else {
+                statusText.text = "WhatsApp closed without adding the pack. Try again after checking WhatsApp is updated."
+            }
+        } else if (requestCode == 200 && resultCode == RESULT_OK) {
+            statusText.text = "Sticker pack added to WhatsApp successfully."
+        }
+    }
+
     override fun onDestroy() {
         worker.shutdown()
         super.onDestroy()
@@ -212,14 +228,14 @@ class MainActivity : ComponentActivity() {
                         putExtra("sticker_pack_name", packName)
                     }
                     try {
-                        // Do not rely on resolveActivity(): Android package visibility can make
-                        // that check return null even when WhatsApp can handle the intent.
-                        startActivity(intent)
+                        // Match WhatsApp's official sample: show a chooser if WhatsApp and
+                        // WhatsApp Business can both receive the sticker-pack request.
+                        startActivityForResult(Intent.createChooser(intent, "Add sticker pack to WhatsApp"), 200)
                     } catch (e: ActivityNotFoundException) {
-                        statusText.text = "Stickers created, but WhatsApp is not installed or cannot add sticker packs."
-                        Toast.makeText(this, "Sticker files created. WhatsApp could not be opened.", Toast.LENGTH_LONG).show()
+                        statusText.text = "Stickers were created, but WhatsApp or WhatsApp Business was not found."
+                        Toast.makeText(this, "Install or update WhatsApp, then try again.", Toast.LENGTH_LONG).show()
                     } catch (e: Exception) {
-                        statusText.text = "Stickers created, but WhatsApp could not open: ${e.message ?: "unknown error"}"
+                        statusText.text = "Could not open WhatsApp: ${e.message ?: "unknown error"}"
                     } finally {
                         addButton.isEnabled = true
                         addButton.text = "CREATE STICKER PACK"
