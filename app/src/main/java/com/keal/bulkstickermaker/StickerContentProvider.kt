@@ -50,7 +50,7 @@ class StickerContentProvider : ContentProvider() {
                 val names = stickerNames()
                 val cursor = MatrixCursor(metadataColumns)
                 if (names.size >= 3) {
-                    cursor.addRow(arrayOf("pack1", packName(), "Bulk Sticker Maker", names.first(),
+                    cursor.addRow(arrayOf("pack1", packName(), "Bulk Sticker Maker", "tray.png",
                         "", "", "", "", "", "", prefs().getString("version", "1") ?: "1", 0, 0))
                 }
                 cursor
