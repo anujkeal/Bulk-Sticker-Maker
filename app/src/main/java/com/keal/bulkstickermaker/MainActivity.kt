@@ -202,6 +202,14 @@ class MainActivity : ComponentActivity() {
                 if (file.length() > 100 * 1024) error("Photo ${index + 1} is too detailed to compress below 100 KB. Try another image.")
                 names.add(fileName)
             }
+            // WhatsApp uses a separate small tray icon for the sticker pack.
+            val traySource = BitmapFactory.decodeFile(File(dir, names.first()).absolutePath)
+                ?: error("Could not create sticker tray icon")
+            val tray = Bitmap.createScaledBitmap(traySource, 96, 96, true)
+            traySource.recycle()
+            FileOutputStream(File(dir, "tray.png")).use { tray.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            tray.recycle()
+
             getSharedPreferences("pack", MODE_PRIVATE).edit()
                 .putString("name", packName)
                 .putString("stickers", names.joinToString("|"))
