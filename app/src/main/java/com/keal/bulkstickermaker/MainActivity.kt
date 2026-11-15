@@ -7,13 +7,18 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
-import android.widget.Button
+import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -21,20 +26,23 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.Executors
 import java.util.UUID
+import java.util.concurrent.Executors
 import kotlin.math.min
 
 class MainActivity : ComponentActivity() {
     private val selected = mutableListOf<Uri>()
     private val worker = Executors.newSingleThreadExecutor()
+
     private lateinit var nameInput: EditText
     private lateinit var countText: TextView
-    private lateinit var statusText: TextView
-    private lateinit var preview: LinearLayout
-    private lateinit var addButton: Button
+    private lateinit var photoGrid: LinearLayout
+    private lateinit var createButton: TextView
 
     private val photoPicker = registerForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(30)
@@ -46,8 +54,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.rgb(12, 14, 17)
-        window.navigationBarColor = Color.rgb(12, 14, 17)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = BG
+        window.navigationBarColor = BG
+        window.setBackgroundDrawableResource(android.R.color.transparent)
         buildScreen()
     }
 
@@ -57,13 +67,12 @@ class MainActivity : ComponentActivity() {
         if (requestCode == 200 && resultCode == RESULT_CANCELED) {
             val validationError = data?.getStringExtra("validation_error")
             if (!validationError.isNullOrBlank()) {
-                statusText.text = "WhatsApp rejected the pack: $validationError"
-                Toast.makeText(this, "WhatsApp rejected the sticker pack. See the message below the button.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "WhatsApp rejected the pack: $validationError", Toast.LENGTH_LONG).show()
             } else {
-                statusText.text = "WhatsApp closed without adding the pack. Try again after checking WhatsApp is updated."
+                Toast.makeText(this, "WhatsApp closed without adding the pack. Check that WhatsApp is updated.", Toast.LENGTH_LONG).show()
             }
         } else if (requestCode == 200 && resultCode == RESULT_OK) {
-            statusText.text = "Sticker pack added to WhatsApp successfully."
+            Toast.makeText(this, "Sticker pack added to WhatsApp.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -75,142 +84,214 @@ class MainActivity : ComponentActivity() {
     private fun buildScreen() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(18))
-            setBackgroundColor(Color.rgb(12, 14, 17))
+            setBackgroundColor(BG)
         }
-        val scroll = ScrollView(this)
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(dp(16), bars.top + dp(12), dp(16), bars.bottom + dp(12))
+            insets
+        }
 
-        content.addView(TextView(this).apply {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(StickerIconView(), LinearLayout.LayoutParams(dp(32), dp(32)))
+        val title = TextView(this).apply {
             text = "Bulk Sticker Maker"
-            textSize = 27f
-            setTextColor(Color.WHITE)
-            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            textSize = 18f
+            setTextColor(WHITE)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = false
+        }
+        header.addView(title, LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+            marginStart = dp(12)
         })
-        content.addView(TextView(this).apply {
-            text = "Turn up to 30 gallery photos into one WhatsApp sticker pack."
-            textSize = 14f
-            setTextColor(Color.rgb(165, 172, 181))
-            setPadding(0, dp(7), 0, dp(22))
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(32)).apply {
+            bottomMargin = dp(28)
         })
 
-        content.addView(sectionTitle("Sticker pack name"))
-        nameInput = EditText(this).apply {
-            setSingleLine(true)
-            setText("My Stickers")
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            setPadding(dp(14), 0, dp(14), 0)
-            background = rounded(Color.rgb(27, 31, 37), 14)
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            clipToPadding = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
-        content.addView(nameInput, LinearLayout.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(20) })
-
-        content.addView(sectionTitle("Your photos"))
-        countText = TextView(this).apply {
-            text = "No photos selected"
-            textSize = 13f
-            setTextColor(Color.rgb(165, 172, 181))
-            setPadding(0, dp(4), 0, dp(12))
-        }
-        content.addView(countText)
-
-        val chooseButton = Button(this).apply {
-            text = "SELECT UP TO 30 PHOTOS"
-            isAllCaps = false
-            textSize = 15f
-            setTextColor(Color.rgb(10, 18, 13))
-            background = rounded(Color.rgb(76, 214, 142), 14)
-            setOnClickListener {
-                photoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            }
-        }
-        content.addView(chooseButton, LinearLayout.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(18) })
-
-        preview = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(4), 0, dp(10))
         }
-        content.addView(preview)
 
-        content.addView(TextView(this).apply {
-            text = "Photos are kept whole. No background removal or cropping. Images are resized to 512 × 512 and compressed to meet WhatsApp's sticker size limit."
-            textSize = 12f
-            setTextColor(Color.rgb(145, 153, 163))
-            setPadding(0, dp(10), 0, dp(18))
-        })
-
-        addButton = Button(this).apply {
-            text = "CREATE STICKER PACK"
-            isAllCaps = false
+        nameInput = EditText(this).apply {
+            hint = "Pack name"
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             textSize = 15f
-            isEnabled = false
-            setTextColor(Color.WHITE)
-            background = rounded(Color.rgb(49, 59, 54), 14)
-            setOnClickListener { createAndAddPack() }
+            setTextColor(WHITE)
+            setHintTextColor(HINT)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            setPadding(dp(14), 0, dp(14), 0)
+            background = outlinedRounded(FIELD, BORDER, 12)
+            includeFontPadding = false
         }
-        content.addView(addButton, LinearLayout.LayoutParams(-1, dp(56)))
+        content.addView(nameInput, LinearLayout.LayoutParams(-1, dp(56)))
 
-        statusText = TextView(this).apply {
-            text = "Select at least 3 photos to create a pack."
+        countText = TextView(this).apply {
+            text = "0 / 30"
             textSize = 12f
-            setTextColor(Color.rgb(165, 172, 181))
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(4))
+            setTextColor(HINT)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            includeFontPadding = false
         }
-        content.addView(statusText)
-
-        content.addView(TextView(this).apply {
-            text = "Made for personal sticker packs • Works offline"
-            textSize = 11f
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(110, 119, 129))
-            setPadding(0, dp(18), 0, dp(8))
+        content.addView(countText, LinearLayout.LayoutParams(-1, dp(18)).apply {
+            topMargin = dp(12)
+            bottomMargin = dp(12)
         })
+
+        photoGrid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        content.addView(photoGrid, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        createButton = TextView(this).apply {
+            text = "Create pack"
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setOnClickListener { createAndAddPack() }
+        }
+        root.addView(createButton, LinearLayout.LayoutParams(-1, dp(52)).apply {
+            topMargin = dp(12)
+        })
+
         setContentView(root)
+        renderSelection()
     }
 
     private fun renderSelection() {
-        countText.text = "${selected.size} / 30 photos selected"
-        addButton.isEnabled = selected.size in 3..30
-        addButton.background = rounded(if (addButton.isEnabled) Color.rgb(25, 145, 83) else Color.rgb(49, 59, 54), 14)
-        statusText.text = if (selected.size >= 3) "Ready to create your sticker pack." else "Select at least 3 photos to create a pack."
-        preview.removeAllViews()
-        if (selected.isEmpty()) return
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        selected.take(6).forEach { uri ->
-            val image = ImageView(this).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                setImageURI(uri)
-                background = rounded(Color.rgb(35, 40, 47), 10)
-                clipToOutline = true
-            }
-            row.addView(image, LinearLayout.LayoutParams(0, dp(76), 1f).apply { marginEnd = dp(6) })
+        countText.text = "${selected.size} / 30"
+        val enabled = selected.size in 3..30
+        createButton.isEnabled = enabled
+        createButton.setTextColor(if (enabled) BG else ACCENT)
+        createButton.background = rounded(
+            if (enabled) ACCENT else Color.argb(36, 77, 216, 145),
+            12
+        )
+        renderPhotoGrid()
+    }
+
+    private fun renderPhotoGrid() {
+        photoGrid.removeAllViews()
+        val tileSize = ((resources.displayMetrics.widthPixels / resources.displayMetrics.density) - 32f - 16f) / 3f
+        val tilePx = tileSize.toInt()
+        val cells = mutableListOf<View>()
+        cells.add(createAddTile(tilePx))
+
+        selected.forEachIndexed { index, uri ->
+            cells.add(createPhotoTile(uri, index, tilePx))
         }
-        preview.addView(row)
-        if (selected.size > 6) {
-            preview.addView(TextView(this).apply {
-                text = "and ${selected.size - 6} more photos"
-                setTextColor(Color.rgb(165, 172, 181))
-                textSize = 12f
-                setPadding(0, dp(8), 0, 0)
+
+        // Keep the initial grid visually populated with six tiles (add + five placeholders).
+        while (cells.size < 6) cells.add(createPlaceholder(tilePx))
+
+        cells.chunked(3).forEachIndexed { rowIndex, rowCells ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            rowCells.forEachIndexed { columnIndex, cell ->
+                val params = LinearLayout.LayoutParams(tilePx, tilePx)
+                if (columnIndex < rowCells.lastIndex) params.marginEnd = dp(8)
+                row.addView(cell, params)
+            }
+            repeat(3 - rowCells.size) {
+                row.addView(View(this), LinearLayout.LayoutParams(tilePx, tilePx))
+            }
+            photoGrid.addView(row, LinearLayout.LayoutParams(-1, tilePx).apply {
+                if (rowIndex > 0) topMargin = dp(8)
             })
         }
+    }
+
+    private fun createAddTile(size: Int): View {
+        val tile = FrameLayout(this).apply {
+            background = dashedRounded(ACCENT, 12)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Add photos"
+            setOnClickListener { launchPhotoPicker() }
+        }
+        val plus = TextView(this).apply {
+            text = "+"
+            textSize = 42f
+            setTextColor(ACCENT)
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+        }
+        tile.addView(plus, FrameLayout.LayoutParams(-1, -1))
+        return tile
+    }
+
+    private fun createPlaceholder(size: Int): View = View(this).apply {
+        background = rounded(FIELD, 12)
+        contentDescription = "Empty photo slot"
+    }
+
+    private fun createPhotoTile(uri: Uri, index: Int, size: Int): View {
+        val tile = FrameLayout(this).apply {
+            background = rounded(FIELD, 12)
+            clipToOutline = true
+        }
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageURI(uri)
+            contentDescription = "Selected photo ${index + 1}"
+        }
+        tile.addView(image, FrameLayout.LayoutParams(-1, -1))
+
+        val remove = TextView(this).apply {
+            text = "×"
+            textSize = 16f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(WHITE)
+            gravity = Gravity.CENTER
+            background = rounded(Color.argb(210, 14, 17, 22), 20)
+            contentDescription = "Remove photo"
+            setOnClickListener {
+                if (index in selected.indices) {
+                    selected.removeAt(index)
+                    renderSelection()
+                }
+            }
+        }
+        tile.addView(remove, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(5)
+            marginEnd = dp(5)
+        })
+        return tile
+    }
+
+    private fun launchPhotoPicker() {
+        photoPicker.launch(
+            androidx.activity.result.PickVisualMediaRequest(
+                ActivityResultContracts.PickVisualMedia.ImageOnly
+            )
+        )
     }
 
     private fun createAndAddPack() {
         val photoUris = selected.toList()
         val packName = nameInput.text.toString().trim().ifBlank { "My Stickers" }.take(128)
         if (photoUris.size !in 3..30) {
-            statusText.text = "Please select between 3 and 30 photos."
+            Toast.makeText(this, "Select at least 3 photos.", Toast.LENGTH_SHORT).show()
             return
         }
 
-        addButton.isEnabled = false
-        addButton.text = "CREATING STICKERS…"
-        statusText.text = "Preparing ${photoUris.size} stickers. Please wait…"
+        createButton.isEnabled = false
+        createButton.text = "Creating…"
 
         // WhatsApp identifies packs by ID, not by their visible name.
         // Give every new pack its own stable ID so it is added separately.
@@ -229,32 +310,34 @@ class MainActivity : ComponentActivity() {
                         .putString("${packId}_version", "1")
                         .apply()
 
-                    statusText.text = "Created ${names.size} stickers. Opening WhatsApp…"
                     val intent = Intent("com.whatsapp.intent.action.ENABLE_STICKER_PACK").apply {
                         putExtra("sticker_pack_id", packId)
                         putExtra("sticker_pack_authority", StickerContentProvider.AUTHORITY)
                         putExtra("sticker_pack_name", packName)
                     }
                     try {
-                        // Match WhatsApp's official sample: show a chooser if WhatsApp and
-                        // WhatsApp Business can both receive the sticker-pack request.
-                        startActivityForResult(Intent.createChooser(intent, "Add sticker pack to WhatsApp"), 200)
+                        startActivityForResult(
+                            Intent.createChooser(intent, "Add sticker pack to WhatsApp"),
+                            200
+                        )
                     } catch (e: ActivityNotFoundException) {
-                        statusText.text = "Stickers were created, but WhatsApp or WhatsApp Business was not found."
-                        Toast.makeText(this, "Install or update WhatsApp, then try again.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this,
+                            "Stickers were created, but WhatsApp or WhatsApp Business was not found.",
+                            Toast.LENGTH_LONG
+                        ).show()
                     } catch (e: Exception) {
-                        statusText.text = "Could not open WhatsApp: ${e.message ?: "unknown error"}"
+                        Toast.makeText(this, "Could not open WhatsApp: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show()
                     } finally {
-                        addButton.isEnabled = true
-                        addButton.text = "CREATE STICKER PACK"
+                        createButton.text = "Create pack"
+                        renderSelection()
                     }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    statusText.text = "Creation failed: ${e.message ?: e.javaClass.simpleName}"
-                    Toast.makeText(this, "Creation failed: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show()
-                    addButton.isEnabled = true
-                    addButton.text = "CREATE STICKER PACK"
+                    Toast.makeText(this, "Creation failed: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                    createButton.text = "Create pack"
+                    renderSelection()
                 }
             }
         }
@@ -311,11 +394,40 @@ class MainActivity : ComponentActivity() {
         return output
     }
 
-    private fun sectionTitle(value: String) = TextView(this).apply {
-        text = value
-        textSize = 16f
-        setTextColor(Color.WHITE)
-        setPadding(0, 0, 0, dp(8))
+    private inner class StickerIconView : View(this@MainActivity) {
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ACCENT }
+        private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = BG
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val side = min(width, height).toFloat()
+            val scale = side / 32f
+            canvas.save()
+            canvas.scale(scale, scale)
+            canvas.drawRoundRect(RectF(0f, 0f, 32f, 32f), 8f, 8f, fill)
+            val sticker = Path().apply {
+                moveTo(9f, 8f)
+                cubicTo(6f, 8f, 5f, 10f, 5f, 13f)
+                lineTo(5f, 19f)
+                cubicTo(5f, 24f, 9f, 27f, 14f, 27f)
+                cubicTo(20f, 27f, 25f, 22f, 25f, 16f)
+                cubicTo(25f, 13f, 23f, 11f, 20f, 10f)
+                cubicTo(16f, 9f, 13f, 8f, 9f, 8f)
+            }
+            canvas.drawPath(sticker, line)
+            val fold = Path().apply {
+                moveTo(17f, 8f)
+                cubicTo(16f, 13f, 19f, 16f, 24f, 16f)
+            }
+            canvas.drawPath(fold, line)
+            canvas.restore()
+        }
     }
 
     private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
@@ -323,5 +435,26 @@ class MainActivity : ComponentActivity() {
         cornerRadius = dp(radius).toFloat()
     }
 
+    private fun outlinedRounded(color: Int, stroke: Int, radius: Int) = GradientDrawable().apply {
+        setColor(color)
+        setStroke(dp(1), stroke)
+        cornerRadius = dp(radius).toFloat()
+    }
+
+    private fun dashedRounded(color: Int, radius: Int) = GradientDrawable().apply {
+        setColor(Color.TRANSPARENT)
+        setStroke(dp(1), color, dp(5).toFloat(), dp(4).toFloat())
+        cornerRadius = dp(radius).toFloat()
+    }
+
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private val BG = Color.rgb(14, 17, 22)
+        private val FIELD = Color.rgb(23, 27, 34)
+        private val BORDER = Color.rgb(38, 44, 54)
+        private val ACCENT = Color.rgb(77, 216, 145)
+        private val HINT = Color.rgb(102, 112, 133)
+        private val WHITE = Color.WHITE
+    }
 }
